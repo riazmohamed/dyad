@@ -23,6 +23,7 @@ import {
 import { ProviderSettingsHeader } from "./ProviderSettingsHeader";
 import { ApiKeyConfiguration } from "./ApiKeyConfiguration";
 import { ModelsSection } from "./ModelsSection";
+import { ProviderOAuthConfiguration } from "./ProviderOAuthConfiguration";
 
 interface ProviderSettingsPageProps {
   provider: string;
@@ -76,6 +77,10 @@ export function ProviderSettingsPage({ provider }: ProviderSettingsPageProps) {
 
   // Use provider ID (which is the 'provider' prop)
   const userApiKey = settings?.providerSettings?.[provider]?.apiKey?.value;
+  const supportsOAuth = provider === "anthropic" || provider === "openai";
+  const hasOAuthConnection = Boolean(
+    supportsOAuth && settings?.providerSettings?.[provider]?.oauth,
+  );
 
   // --- Configuration Logic --- Updated Priority ---
   const isValidUserKey =
@@ -117,7 +122,7 @@ export function ProviderSettingsPage({ provider }: ProviderSettingsPageProps) {
       ? isAzureConfigured
       : provider === "vertex"
         ? isVertexConfigured
-        : isValidUserKey || hasEnvKey; // Configured if either is set
+        : isValidUserKey || hasEnvKey || hasOAuthConnection; // Configured if credentials are set
 
   // --- Save Handler ---
   const handleSaveKey = async (value: string) => {
@@ -307,21 +312,29 @@ export function ProviderSettingsPage({ provider }: ProviderSettingsPageProps) {
             </AlertDescription>
           </Alert>
         ) : (
-          <ApiKeyConfiguration
-            provider={provider}
-            providerDisplayName={providerDisplayName}
-            settings={settings}
-            envVars={envVars}
-            envVarName={envVarName}
-            isSaving={isSaving}
-            saveError={saveError}
-            apiKeyInput={apiKeyInput}
-            onApiKeyInputChange={setApiKeyInput}
-            onSaveKey={handleSaveKey}
-            onDeleteKey={handleDeleteKey}
-            isDyad={isDyad}
-            updateSettings={updateSettings}
-          />
+          <>
+            <ApiKeyConfiguration
+              provider={provider}
+              providerDisplayName={providerDisplayName}
+              settings={settings}
+              envVars={envVars}
+              envVarName={envVarName}
+              isSaving={isSaving}
+              saveError={saveError}
+              apiKeyInput={apiKeyInput}
+              onApiKeyInputChange={setApiKeyInput}
+              onSaveKey={handleSaveKey}
+              onDeleteKey={handleDeleteKey}
+              isDyad={isDyad}
+              updateSettings={updateSettings}
+            />
+            {supportsOAuth && (
+              <ProviderOAuthConfiguration
+                provider={provider}
+                providerDisplayName={providerDisplayName}
+              />
+            )}
+          </>
         )}
 
         {isDyad && !settingsLoading && (

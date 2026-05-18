@@ -221,6 +221,8 @@ export const queryKeys = {
     byProviders: ["language-models-by-providers"] as const,
     forProvider: ({ providerId }: { providerId: string }) =>
       ["language-models", providerId] as const,
+    oauthStatus: ({ providerId }: { providerId: string }) =>
+      ["language-models", "oauth-status", providerId] as const,
   },
 
   // ─────────────────────────────────────────────────────────────────────────────

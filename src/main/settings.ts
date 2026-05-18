@@ -7,6 +7,7 @@ import {
   type UserSettings,
   Secret,
   VertexProviderSetting,
+  type RegularProviderSetting,
   migrateStoredSettings,
 } from "../lib/schemas";
 import {
@@ -300,13 +301,15 @@ export function writeSettings(settings: Partial<UserSettings>): void {
       }
     }
     for (const provider in newSettings.providerSettings) {
-      if (newSettings.providerSettings[provider].apiKey) {
-        newSettings.providerSettings[provider].apiKey = encrypt(
-          newSettings.providerSettings[provider].apiKey.value,
-        );
+      const providerSetting = newSettings.providerSettings[
+        provider
+      ] as RegularProviderSetting;
+      if (providerSetting.apiKey) {
+        providerSetting.apiKey = encrypt(providerSetting.apiKey.value);
       }
+      encryptProviderOAuthSecrets(providerSetting);
       // Encrypt Vertex service account key if present
-      const v = newSettings.providerSettings[provider] as VertexProviderSetting;
+      const v = providerSetting as VertexProviderSetting;
       if (provider === "vertex" && v?.serviceAccountKey) {
         v.serviceAccountKey = encrypt(v.serviceAccountKey.value);
       }
@@ -431,21 +434,23 @@ function readExistingSettingsFile(filePath: string): UserSettings {
     }
   }
   for (const provider in combinedSettings.providerSettings) {
-    if (combinedSettings.providerSettings[provider].apiKey) {
+    const providerSetting = combinedSettings.providerSettings[
+      provider
+    ] as RegularProviderSetting;
+    if (providerSetting.apiKey) {
       const decrypted = decryptStoredSecret(
-        combinedSettings.providerSettings[provider].apiKey,
+        providerSetting.apiKey,
         `${provider} API key`,
       );
       if (decrypted) {
-        combinedSettings.providerSettings[provider].apiKey = decrypted;
+        providerSetting.apiKey = decrypted;
       } else {
-        delete combinedSettings.providerSettings[provider].apiKey;
+        delete providerSetting.apiKey;
       }
     }
+    decryptProviderOAuthSecrets(provider, providerSetting);
     // Decrypt Vertex service account key if present
-    const v = combinedSettings.providerSettings[
-      provider
-    ] as VertexProviderSetting;
+    const v = providerSetting as VertexProviderSetting;
     if (provider === "vertex" && v?.serviceAccountKey) {
       const decrypted = decryptStoredSecret(
         v.serviceAccountKey,
@@ -469,6 +474,48 @@ function readExistingSettingsFile(filePath: string): UserSettings {
   const migratedSettings = migrateStoredSettings(storedSettings);
   // Validate the migrated settings against the active schema
   return UserSettingsSchema.parse(migratedSettings);
+}
+
+function encryptProviderOAuthSecrets(
+  providerSetting: RegularProviderSetting,
+): void {
+  if (!providerSetting.oauth) {
+    return;
+  }
+
+  providerSetting.oauth.accessToken = encrypt(
+    providerSetting.oauth.accessToken.value,
+  );
+  providerSetting.oauth.refreshToken = encrypt(
+    providerSetting.oauth.refreshToken.value,
+  );
+}
+
+function decryptProviderOAuthSecrets(
+  provider: string,
+  providerSetting: RegularProviderSetting,
+): void {
+  const oauth = providerSetting.oauth;
+  if (!oauth) {
+    return;
+  }
+
+  const accessToken = decryptStoredSecret(
+    oauth.accessToken,
+    `${provider} OAuth access token`,
+  );
+  const refreshToken = decryptStoredSecret(
+    oauth.refreshToken,
+    `${provider} OAuth refresh token`,
+  );
+
+  if (!accessToken || !refreshToken) {
+    delete providerSetting.oauth;
+    return;
+  }
+
+  oauth.accessToken = accessToken;
+  oauth.refreshToken = refreshToken;
 }
 
 function decryptStoredSecret(data: Secret, label: string): Secret | undefined {

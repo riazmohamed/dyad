@@ -54,6 +54,7 @@ export { freeAgentQuotaContracts } from "./free_agent_quota";
 export { audioContracts } from "./audio";
 export { mediaContracts } from "./media";
 export { imageGenerationContracts } from "./image_generation";
+export { oauthContracts } from "./oauth";
 
 // =============================================================================
 // Client Exports
@@ -87,6 +88,7 @@ export { freeAgentQuotaClient } from "./free_agent_quota";
 export { audioClient } from "./audio";
 export { mediaClient } from "./media";
 export { imageGenerationClient } from "./image_generation";
+export { oauthClient } from "./oauth";
 
 // =============================================================================
 // Type Exports
@@ -99,6 +101,18 @@ export type {
   SetUserSettingsInput,
   SetUserSettingsOutput,
 } from "./settings";
+
+// OAuth types
+export type {
+  ProviderOAuthProvider,
+  StartProviderOAuthInput,
+  StartProviderOAuthOutput,
+  CompleteProviderOAuthInput,
+  CompleteProviderOAuthOutput,
+  LogoutProviderOAuthInput,
+  GetProviderOAuthStatusInput,
+  GetProviderOAuthStatusOutput,
+} from "./oauth";
 
 // App types
 export type {
@@ -388,6 +402,7 @@ import { freeAgentQuotaClient } from "./free_agent_quota";
 import { audioClient } from "./audio";
 import { mediaClient } from "./media";
 import { imageGenerationClient } from "./image_generation";
+import { oauthClient } from "./oauth";
 
 /**
  * Unified IPC client with all domains organized by namespace.
@@ -447,6 +462,7 @@ export const ipc = {
   audio: audioClient,
   media: mediaClient,
   imageGeneration: imageGenerationClient,
+  oauth: oauthClient,
 
   // Event clients for main->renderer pub/sub
   events: {

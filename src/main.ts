@@ -81,8 +81,7 @@ if (started) {
 // Decide the git directory depending on environment
 function resolveLocalGitDirectory() {
   if (!app.isPackaged) {
-    // Dev: app.getAppPath() is the project root
-    return path.join(app.getAppPath(), "node_modules/dugite/git");
+    return path.join(process.cwd(), "node_modules/dugite/git");
   }
 
   // Packaged app: git is bundled via extraResource
@@ -381,7 +380,9 @@ const createWindow = () => {
       preload: path.join(__dirname, "preload.js"),
       // transparent: true,
     },
-    icon: path.join(app.getAppPath(), "assets/icon/logo.png"),
+    icon: app.isPackaged
+      ? path.join(process.resourcesPath, "assets/icon/logo.png")
+      : path.join(process.cwd(), "assets/icon/logo.png"),
     // backgroundColor: "#00000001",
     // frame: false,
   });

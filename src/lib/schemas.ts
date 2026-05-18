@@ -97,8 +97,19 @@ export type LargeLanguageModel = z.infer<typeof LargeLanguageModelSchema>;
  * Zod schema for provider settings
  * Regular providers use only apiKey. Vertex has additional optional fields.
  */
+export const OAuthTokenSetSchema = z.object({
+  type: z.enum(["anthropic", "openai-codex"]),
+  accessToken: SecretSchema,
+  refreshToken: SecretSchema,
+  expiresAt: z.number(),
+  accountId: z.string().optional(),
+  baseUrl: z.string().optional(),
+});
+export type OAuthTokenSet = z.infer<typeof OAuthTokenSetSchema>;
+
 export const RegularProviderSettingSchema = z.object({
   apiKey: SecretSchema.optional(),
+  oauth: OAuthTokenSetSchema.optional(),
 });
 
 export const AzureProviderSettingSchema = z.object({

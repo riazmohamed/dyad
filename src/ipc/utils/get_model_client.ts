@@ -12,6 +12,8 @@ import type {
   UserSettings,
   VertexProviderSetting,
   AzureProviderSetting,
+  OAuthTokenSet,
+  RegularProviderSetting,
 } from "../../lib/schemas";
 import { getEnvVar } from "./read_env";
 import log from "electron-log";
@@ -28,7 +30,21 @@ import { LM_STUDIO_BASE_URL } from "./lm_studio_utils";
 import { createOllamaProvider } from "./ollama_provider";
 import { getOllamaApiUrl } from "../handlers/local_model_ollama_handler";
 import { createFallback } from "./fallback_ai_model";
-import { DyadError, DyadErrorKind } from "@/errors/dyad_error";
+import { DyadError, DyadErrorKind, isDyadError } from "@/errors/dyad_error";
+import { readSettings, writeSettings } from "@/main/settings";
+import {
+  ANTHROPIC_OAUTH_BETA_HEADER,
+  getAnthropicOAuthUserAgent,
+  isAnthropicOAuthTokenExpired,
+  refreshAnthropicOAuthToken,
+} from "./anthropic_oauth";
+import {
+  createOpenAICodexFetch,
+  isOpenAICodexOAuthTokenExpired,
+  OPENAI_CODEX_BASE_URL,
+  OPENAI_CODEX_ORIGINATOR,
+  refreshOpenAICodexOAuthToken,
+} from "./openai_codex_oauth";
 
 const dyadEngineUrl = process.env.DYAD_ENGINE_URL;
 
@@ -131,17 +147,22 @@ export async function getModelClient(
           DyadErrorKind.NotFound,
         );
       }
+      const freeOpenRouterModels = await Promise.all(
+        FREE_OPENROUTER_MODEL_NAMES.map(
+          async (name: string) =>
+            (
+              await getRegularModelClient(
+                { provider: "openrouter", name },
+                settings,
+                openRouterProvider,
+              )
+            ).modelClient.model,
+        ),
+      );
       return {
         modelClient: {
           model: createFallback({
-            models: FREE_OPENROUTER_MODEL_NAMES.map(
-              (name: string) =>
-                getRegularModelClient(
-                  { provider: "openrouter", name },
-                  settings,
-                  openRouterProvider,
-                ).modelClient.model,
-            ),
+            models: freeOpenRouterModels,
           }),
           builtinProviderId: "openrouter",
         },
@@ -162,8 +183,13 @@ export async function getModelClient(
       const apiKey =
         settings.providerSettings?.[resolvedModel.providerId]?.apiKey?.value ||
         (envVarName ? getEnvVar(envVarName) : undefined);
+      const hasProviderOAuth =
+        resolvedModel.providerId === "anthropic" ||
+        resolvedModel.providerId === "openai"
+          ? !!settings.providerSettings?.[resolvedModel.providerId]?.oauth
+          : false;
 
-      if (apiKey) {
+      if (apiKey || hasProviderOAuth) {
         logger.log(
           `Using provider: ${resolvedModel.providerId} model: ${resolvedModel.apiName}`,
         );
@@ -265,14 +291,14 @@ async function getProModelClient({
   };
 }
 
-function getRegularModelClient(
+async function getRegularModelClient(
   model: LargeLanguageModel,
   settings: UserSettings,
   providerConfig: LanguageModelProvider,
-): {
+): Promise<{
   modelClient: ModelClient;
   backupModelClients: ModelClient[];
-} {
+}> {
   // Get API key for the specific provider
   const apiKey =
     settings.providerSettings?.[model.provider]?.apiKey?.value ||
@@ -284,6 +310,30 @@ function getRegularModelClient(
   // Create client based on provider ID or type
   switch (providerId) {
     case "openai": {
+      const oauth = await resolveProviderOAuthCredentials("openai", settings, {
+        fallbackApiKey: apiKey,
+      });
+      if (oauth) {
+        const provider = createOpenAI({
+          apiKey: oauth.accessToken.value,
+          baseURL: `${oauth.baseUrl ?? OPENAI_CODEX_BASE_URL}/v1`,
+          headers: {
+            ...(oauth.accountId
+              ? { "chatgpt-account-id": oauth.accountId }
+              : {}),
+            originator: OPENAI_CODEX_ORIGINATOR,
+          },
+          fetch: createOpenAICodexFetch(),
+        });
+        return {
+          modelClient: {
+            model: provider.responses(model.name),
+            builtinProviderId: providerId,
+          },
+          backupModelClients: [],
+        };
+      }
+
       const provider = createOpenAI({ apiKey });
       return {
         modelClient: {
@@ -294,7 +344,22 @@ function getRegularModelClient(
       };
     }
     case "anthropic": {
-      const provider = createAnthropic({ apiKey });
+      const oauth = await resolveProviderOAuthCredentials(
+        "anthropic",
+        settings,
+        {
+          fallbackApiKey: apiKey,
+        },
+      );
+      const provider = oauth
+        ? createAnthropic({
+            authToken: oauth.accessToken.value,
+            headers: {
+              "anthropic-beta": ANTHROPIC_OAUTH_BETA_HEADER,
+              "user-agent": getAnthropicOAuthUserAgent(),
+            },
+          })
+        : createAnthropic({ apiKey });
       return {
         modelClient: {
           model: provider(model.name),
@@ -518,4 +583,125 @@ function getRegularModelClient(
       );
     }
   }
+}
+
+type OAuthProviderId = "anthropic" | "openai";
+
+async function resolveProviderOAuthCredentials(
+  providerId: OAuthProviderId,
+  settings: UserSettings,
+  { fallbackApiKey }: { fallbackApiKey?: string },
+): Promise<OAuthTokenSet | undefined> {
+  const providerSetting = settings.providerSettings?.[providerId] as
+    | RegularProviderSetting
+    | undefined;
+  const oauth = providerSetting?.oauth;
+  if (!oauth) {
+    return undefined;
+  }
+
+  if (!isProviderOAuthTokenExpired(oauth)) {
+    return oauth;
+  }
+
+  try {
+    const refreshedOAuth = await refreshProviderOAuthCredentials(oauth);
+    saveProviderOAuthCredentials(providerId, refreshedOAuth);
+    return refreshedOAuth;
+  } catch (error) {
+    if (isDyadError(error) && error.kind === DyadErrorKind.Auth) {
+      if (fallbackApiKey) {
+        removeProviderOAuthCredentials(providerId);
+        logger.warn(
+          `Removed expired ${providerId} OAuth credentials and fell back to API key.`,
+        );
+        return undefined;
+      }
+
+      throw new DyadError(
+        `Your ${providerId === "anthropic" ? "Claude" : "ChatGPT/Codex"} sign-in expired. Please reconnect it in Settings or add an API key.`,
+        DyadErrorKind.Auth,
+      );
+    }
+
+    throw error;
+  }
+}
+
+function isProviderOAuthTokenExpired(oauth: OAuthTokenSet): boolean {
+  switch (oauth.type) {
+    case "anthropic":
+      return isAnthropicOAuthTokenExpired(oauth.expiresAt);
+    case "openai-codex":
+      return isOpenAICodexOAuthTokenExpired(oauth.expiresAt);
+  }
+}
+
+async function refreshProviderOAuthCredentials(
+  oauth: OAuthTokenSet,
+): Promise<OAuthTokenSet> {
+  switch (oauth.type) {
+    case "anthropic": {
+      const refreshed = await refreshAnthropicOAuthToken({
+        refreshToken: oauth.refreshToken.value,
+      });
+      return toSettingsOAuthTokenSet(refreshed);
+    }
+    case "openai-codex": {
+      const refreshed = await refreshOpenAICodexOAuthToken({
+        refreshToken: oauth.refreshToken.value,
+      });
+      return toSettingsOAuthTokenSet(refreshed);
+    }
+  }
+}
+
+function saveProviderOAuthCredentials(
+  providerId: OAuthProviderId,
+  oauth: OAuthTokenSet,
+): void {
+  const settings = readSettings();
+  writeSettings({
+    providerSettings: {
+      ...settings.providerSettings,
+      [providerId]: {
+        ...settings.providerSettings[providerId],
+        oauth,
+      },
+    },
+  });
+}
+
+function removeProviderOAuthCredentials(providerId: OAuthProviderId): void {
+  const settings = readSettings();
+  const providerSetting = settings.providerSettings[providerId];
+  if (!providerSetting?.oauth) {
+    return;
+  }
+
+  const { oauth: _oauth, ...providerSettingWithoutOAuth } = providerSetting;
+  writeSettings({
+    providerSettings: {
+      ...settings.providerSettings,
+      [providerId]: providerSettingWithoutOAuth,
+    },
+  });
+}
+
+function toSettingsOAuthTokenSet(tokenSet: {
+  type: OAuthTokenSet["type"];
+  accessToken: string;
+  refreshToken: string;
+  expiresAt: number;
+  accountId?: string;
+  baseUrl?: string;
+}): OAuthTokenSet {
+  return {
+    type: tokenSet.type,
+    accessToken: { value: tokenSet.accessToken },
+    refreshToken: { value: tokenSet.refreshToken },
+    expiresAt: tokenSet.expiresAt,
+    ...(tokenSet.accountId ? { accountId: tokenSet.accountId } : {}),
+    ...(tokenSet.baseUrl ? { baseUrl: tokenSet.baseUrl } : {}),
+  };
 }

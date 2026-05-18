@@ -13,12 +13,4 @@ export default defineConfig({
       external: ["better-sqlite3", "node-pty", "mustardscript"],
     },
   },
-  plugins: [
-    {
-      name: "restart",
-      closeBundle() {
-        process.stdin.emit("data", "rs");
-      },
-    },
-  ],
 });

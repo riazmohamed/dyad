@@ -59,8 +59,15 @@ export function isProviderSetup(
     return false;
   }
 
-  // Check API key in settings
+  // Check API key or provider OAuth in settings
   if (providerSettings?.apiKey?.value) {
+    return true;
+  }
+
+  if (
+    (provider === "anthropic" || provider === "openai") &&
+    providerSettings?.oauth
+  ) {
     return true;
   }
 

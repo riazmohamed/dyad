@@ -88,7 +88,12 @@ export function ApiKeyConfiguration({
   }
 
   const envApiKey = envVarName ? envVars[envVarName] : undefined;
-  const userApiKey = settings?.providerSettings?.[provider]?.apiKey?.value;
+  const providerSettings = settings?.providerSettings?.[provider];
+  const userApiKey = providerSettings?.apiKey?.value;
+  const hasOAuthConnection = Boolean(
+    (provider === "anthropic" || provider === "openai") &&
+    providerSettings?.oauth,
+  );
 
   const isValidUserKey =
     !!userApiKey &&
@@ -96,11 +101,13 @@ export function ApiKeyConfiguration({
     userApiKey !== "Not Set";
   const hasEnvKey = !!envApiKey;
 
-  const activeKeySource = isValidUserKey
-    ? "settings"
-    : hasEnvKey
-      ? "env"
-      : "none";
+  const activeKeySource = hasOAuthConnection
+    ? "oauth"
+    : isValidUserKey
+      ? "settings"
+      : hasEnvKey
+        ? "env"
+        : "none";
 
   const defaultAccordionValue = [];
   if (isValidUserKey || !hasEnvKey) {
@@ -165,6 +172,12 @@ export function ApiKeyConfiguration({
                 {activeKeySource === "settings" && (
                   <p className="text-xs text-green-600 dark:text-green-400 mt-1">
                     This key is currently active.
+                  </p>
+                )}
+                {activeKeySource === "oauth" && (
+                  <p className="text-xs text-yellow-600 dark:text-yellow-400 mt-1">
+                    Subscription sign-in is currently active. Disconnect it to
+                    use this key.
                   </p>
                 )}
               </AlertDescription>
@@ -252,6 +265,12 @@ export function ApiKeyConfiguration({
                     <p className="text-xs text-yellow-600 dark:text-yellow-400 mt-1">
                       This key is currently being overridden by the key set in
                       Settings.
+                    </p>
+                  )}
+                  {activeKeySource === "oauth" && (
+                    <p className="text-xs text-yellow-600 dark:text-yellow-400 mt-1">
+                      This key is currently being overridden by subscription
+                      sign-in.
                     </p>
                   )}
                 </AlertDescription>

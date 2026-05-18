@@ -38,6 +38,7 @@ vi.mock("electron", () => ({
   },
   safeStorage: {
     isEncryptionAvailable: vi.fn(),
+    encryptString: vi.fn(),
     decryptString: vi.fn(),
   },
 }));
@@ -167,6 +168,87 @@ describe("readSettings", () => {
       expect(result.providerSettings.openai.apiKey).toEqual({
         value: "decrypted-api-key",
         encryptionType: "electron-safe-storage",
+      });
+    });
+
+    it("should decrypt encrypted provider OAuth tokens", () => {
+      const mockFileContent = {
+        providerSettings: {
+          anthropic: {
+            apiKey: {
+              value: "plaintext-api-key",
+              encryptionType: "plaintext",
+            },
+            oauth: {
+              type: "anthropic",
+              accessToken: {
+                value: "encrypted-anthropic-access-token",
+                encryptionType: "electron-safe-storage",
+              },
+              refreshToken: {
+                value: "encrypted-anthropic-refresh-token",
+                encryptionType: "electron-safe-storage",
+              },
+              expiresAt: 123456,
+            },
+          },
+          openai: {
+            oauth: {
+              type: "openai-codex",
+              accessToken: {
+                value: "encrypted-openai-access-token",
+                encryptionType: "electron-safe-storage",
+              },
+              refreshToken: {
+                value: "encrypted-openai-refresh-token",
+                encryptionType: "electron-safe-storage",
+              },
+              expiresAt: 654321,
+              accountId: "account-123",
+              baseUrl: "https://chatgpt.com/backend-api/codex",
+            },
+          },
+        },
+      };
+
+      mockFs.existsSync.mockReturnValue(true);
+      mockFs.readFileSync.mockReturnValue(JSON.stringify(mockFileContent));
+      mockSafeStorage.decryptString
+        .mockReturnValueOnce("decrypted-anthropic-access-token")
+        .mockReturnValueOnce("decrypted-anthropic-refresh-token")
+        .mockReturnValueOnce("decrypted-openai-access-token")
+        .mockReturnValueOnce("decrypted-openai-refresh-token");
+
+      const result = readSettings();
+
+      expect(result.providerSettings.anthropic.apiKey?.value).toBe(
+        "plaintext-api-key",
+      );
+      expect(result.providerSettings.anthropic.oauth).toEqual({
+        type: "anthropic",
+        accessToken: {
+          value: "decrypted-anthropic-access-token",
+          encryptionType: "electron-safe-storage",
+        },
+        refreshToken: {
+          value: "decrypted-anthropic-refresh-token",
+          encryptionType: "electron-safe-storage",
+        },
+        expiresAt: 123456,
+      });
+      expect(result.providerSettings.openai.oauth).toEqual({
+        type: "openai-codex",
+        accessToken: {
+          value: "decrypted-openai-access-token",
+          encryptionType: "electron-safe-storage",
+        },
+        refreshToken: {
+          value: "decrypted-openai-refresh-token",
+          encryptionType: "electron-safe-storage",
+        },
+        expiresAt: 654321,
+        accountId: "account-123",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
       });
     });
 
@@ -581,6 +663,44 @@ describe("readSettings", () => {
       );
     });
 
+    it("should delete only broken provider OAuth tokens", () => {
+      const mockFileContent = {
+        providerSettings: {
+          anthropic: {
+            apiKey: {
+              value: "plaintext-api-key",
+              encryptionType: "plaintext",
+            },
+            oauth: {
+              type: "anthropic",
+              accessToken: {
+                value: "broken-access-token",
+                encryptionType: "electron-safe-storage",
+              },
+              refreshToken: {
+                value: "encrypted-refresh-token",
+                encryptionType: "electron-safe-storage",
+              },
+              expiresAt: 123456,
+            },
+          },
+        },
+      };
+
+      mockFs.existsSync.mockReturnValue(true);
+      mockFs.readFileSync.mockReturnValue(JSON.stringify(mockFileContent));
+      mockSafeStorage.decryptString.mockImplementationOnce(() => {
+        throw new DyadError("Decryption failed", DyadErrorKind.External);
+      });
+
+      const result = readSettings();
+
+      expect(result.providerSettings.anthropic.apiKey?.value).toBe(
+        "plaintext-api-key",
+      );
+      expect(result.providerSettings.anthropic.oauth).toBeUndefined();
+    });
+
     it("should not treat safeStorage readiness errors as corrupt secrets", () => {
       const mockFileContent = {
         selectedModel: {
@@ -746,6 +866,73 @@ describe("writeSettings", () => {
       ),
     );
     expect(mockFs.renameSync).toHaveBeenCalled();
+  });
+
+  it("encrypts provider OAuth tokens before writing settings", () => {
+    mockFs.existsSync.mockReturnValue(true);
+    mockFs.readFileSync.mockReturnValue(
+      JSON.stringify({
+        providerSettings: {
+          anthropic: {
+            apiKey: {
+              value: "existing-api-key",
+              encryptionType: "plaintext",
+            },
+          },
+        },
+        selectedModel: {
+          name: "claude-sonnet-4-5",
+          provider: "anthropic",
+        },
+        selectedTemplateId: "react",
+        enableAutoUpdate: true,
+        releaseChannel: "stable",
+      }),
+    );
+    mockSafeStorage.encryptString.mockImplementation((value: string) =>
+      Buffer.from(`encrypted:${value}`),
+    );
+
+    writeSettings({
+      providerSettings: {
+        anthropic: {
+          apiKey: {
+            value: "existing-api-key",
+          },
+          oauth: {
+            type: "anthropic",
+            accessToken: {
+              value: "access-token",
+            },
+            refreshToken: {
+              value: "refresh-token",
+            },
+            expiresAt: 123456,
+          },
+        },
+      },
+    });
+
+    const writtenSettings = JSON.parse(
+      mockFs.writeFileSync.mock.calls[0]?.[1] as string,
+    );
+
+    expect(writtenSettings.providerSettings.anthropic.apiKey).toEqual({
+      value: Buffer.from("encrypted:existing-api-key").toString("base64"),
+      encryptionType: "electron-safe-storage",
+    });
+    expect(writtenSettings.providerSettings.anthropic.oauth).toEqual({
+      type: "anthropic",
+      accessToken: {
+        value: Buffer.from("encrypted:access-token").toString("base64"),
+        encryptionType: "electron-safe-storage",
+      },
+      refreshToken: {
+        value: Buffer.from("encrypted:refresh-token").toString("base64"),
+        encryptionType: "electron-safe-storage",
+      },
+      expiresAt: 123456,
+    });
   });
 
   it("writes through a temporary file and backs up the previous settings file", () => {
